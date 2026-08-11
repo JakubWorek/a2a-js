@@ -19,7 +19,8 @@ cleanup() {
   rm -rf a2a-itk > /dev/null 2>&1 || true
   rm -rf pyproto > /dev/null 2>&1 || true
   rm -f instruction.proto > /dev/null 2>&1 || true
-  rm -f raw_results.json > /dev/null 2>&1 || true
+  # Shadow workflow needs raw_results.json to survive so compare_results.py
+  # can diff the OLD and NEW legs; keep it around here.
   echo "Done. Final exit code: $RESULT"
 }
 
@@ -90,11 +91,19 @@ if [ "${ITK_LOG_LEVEL^^}" = "DEBUG" ]; then
   DOCKER_MOUNT_LOGS="-v $ITK_DIR/logs:/app/logs"
 fi
 
+# Bind-mount the launcher's SHA-keyed checkout+build cache from the host.
+# No-op for the legacy itk_service.py leg (it doesn't touch this dir).
+# For the launcher-v2 leg, entries survive across script invocations and,
+# in CI, across shadow workflow runs via actions/cache on the host path.
+mkdir -p "$HOME/.cache/a2a-itk-launcher"
+
 docker run -d --name itk-service \
   -v "$A2A_JS_ROOT:/app/agents/repo" \
   -v "$ITK_DIR:/app/agents/repo/itk" \
+  -v "$HOME/.cache/a2a-itk-launcher:/root/.cache/a2a-itk" \
   $DOCKER_MOUNT_LOGS \
   -e ITK_LOG_LEVEL="$ITK_LOG_LEVEL" \
+  -e ITK_ENTRYPOINT="${ITK_ENTRYPOINT:-itk_service.py}" \
   -p 8000:8000 \
   itk_service
 
@@ -131,8 +140,11 @@ fi
 # heterogeneous-SDK mixtures that are too expensive to run on every PR
 # but catch cross-SDK regressions that the PR set's 2-node euler cycles
 # cannot.
-SCENARIO_FILE="scenarios.json"
-if [ "${ITK_NIGHTLY_RUN^^}" = "TRUE" ]; then
+# Shadow workflow can pin a specific scenarios file via ITK_SCENARIOS_FILE
+# (needed to run the PR-tier set while still using ITK_NIGHTLY_RUN=true so
+# raw_results.json is saved for compare_results.py).
+SCENARIO_FILE="${ITK_SCENARIOS_FILE:-scenarios.json}"
+if [ -z "${ITK_SCENARIOS_FILE:-}" ] && [ "${ITK_NIGHTLY_RUN^^}" = "TRUE" ]; then
   SCENARIO_FILE="scenarios_full.json"
 fi
 
